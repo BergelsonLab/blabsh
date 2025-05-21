@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+
+# parallel-annotation branch classifier
+#
+# In our lab’s "parallel annotation" workflow, this script classifies branches
+# relative to the principal line (`main`) into three categories:
+#
+# 1. NOT merged: Branches where annotation work has been done but not yet merged.
+#    These correspond to branches with unmerged commits (annotations-in-progress).
+#    These need to be merged once you have a go-ahead from the lab member responsible
+#    for a given type of annotations. See gitbook page on parallel annotationg merging
+#    for details.
+#
+# 2. ON principal line of main: Branches whose tip is on the first-parent history of `main`.
+#    These were created but no annotation has been done, or new annotations exist only
+#    in the local "annotations-in-progress" folder and haven’t been committed/pushed.
+#    If the annotations-in-progress folder is up-to-date and was created some time ago,
+#    both the folder and the branch can be safely deleted.
+#
+# 3. merged as a SIDE commit into main: Branches whose commits are reachable from `main`
+#    but not via first parents. These have been merged and both the branch and
+#    its annotations folder should be deleted.
+#
+# Use cases:
+# - Run as is in "VIHI/SubjectFiles/LENA/annotations" (blab share clone of VIHI_LENA)
+# - When working in a local clone of "VIHI_LENA", run with -r flag.
+#
+# Usage: $0 [-r]
+#   -r : classify remote-tracking branches (refs/remotes/origin)
+#        default (no flag) classifies local branches (refs/heads)
+
+MODE="local"
+# Parse flags
+while getopts "r" opt; do
+  case "$opt" in
+    r) MODE="remote" ;; 
+    *) echo "Usage: $0 [-r]" >&2; exit 1 ;; 
+  esac
+done
+
+TARGET="main"
+
+# Pre-compute first-parent history and exact tip of main
+first_parents=$(git rev-list --first-parent "$TARGET")
+main_tip=$(git rev-parse "$TARGET")
+
+# Determine reference namespace
+if [ "$MODE" = "remote" ]; then
+  ref_ns="refs/remotes/origin"
+else
+  ref_ns="refs/heads"
+fi
+
+# Collect branches and trim whitespace
+raw_branches=$(git for-each-ref --format='%(refname:short)' "$ref_ns" |
+  sed 's/^[[:space:]]*//')
+# Remove HEAD pointers in remote mode
+if [ "$MODE" = "remote" ]; then
+  branches=$(echo "$raw_branches" | grep -vE '^(origin|origin/HEAD)$')
+else
+  branches="$raw_branches"
+fi
+
+# Classify each branch
+for branch in $branches; do
+  tip=$(git rev-parse "$branch")
+  if [ "$tip" = "$main_tip" ]; then
+    status="points at tip of $TARGET"
+  elif git merge-base --is-ancestor "$branch" "$TARGET"; then
+    if echo "$first_parents" | grep -qx "$tip"; then
+      status="ON principal line of $TARGET"
+    else
+      status="merged as a SIDE commit into $TARGET"
+    fi
+  else
+    status="NOT merged into $TARGET"
+  fi
+  echo "$branch → $status"
+done
